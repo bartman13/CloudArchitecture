@@ -1,0 +1,455 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: CUR-TF-200-ACACAD-2 Capstone Project
+
+# 1. scaling group
+# 2. load balancer, target group
+# 3. parameter store - zrobione
+# 4. baza danych - zrobione
+
+
+
+Parameters:
+# DB configuration
+  DBName:
+    Default: capstonedb
+    Description: The database name
+    Type: String
+    MinLength: '1'
+    MaxLength: '64'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric
+      characters.
+  DBUser:
+    Default: admin
+    NoEcho: 'true'
+    Description: The database admin account username
+    Type: String
+    MinLength: '1'
+    MaxLength: '16'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric
+      characters.
+  DBPassword:
+    Default: admin123
+    NoEcho: 'true'
+    Description: The database admin account password
+    Type: String
+    MinLength: '1'
+    MaxLength: '41'
+    AllowedPattern: '[a-zA-Z0-9]+'
+    ConstraintDescription: must contain only alphanumeric characters.
+  DBAllocatedStorage:
+    Default: '20'
+    Description: The size of the database (Gb)
+    Type: Number
+    MinValue: '5'
+    MaxValue: '1024'
+    ConstraintDescription: must be between 5 and 1024Gb.
+  DBInstanceClass:
+    Description: The database instance type
+    Type: String
+    Default: db.t2.small
+    AllowedValues: [db.t1.micro, db.m1.small, db.m1.medium, db.m1.large, db.m1.xlarge,
+      db.m2.xlarge, db.m2.2xlarge, db.m2.4xlarge, db.m3.medium, db.m3.large, db.m3.xlarge,
+      db.m3.2xlarge, db.m4.large, db.m4.xlarge, db.m4.2xlarge, db.m4.4xlarge, db.m4.10xlarge,
+      db.r3.large, db.r3.xlarge, db.r3.2xlarge, db.r3.4xlarge, db.r3.8xlarge, db.m2.xlarge,
+      db.m2.2xlarge, db.m2.4xlarge, db.cr1.8xlarge, db.t2.micro, db.t2.small, db.t2.medium,
+      db.t2.large]
+    ConstraintDescription: must select a valid database instance type.
+  EC2SecurityGroup:
+    Description: The EC2 security group that contains instances that need access to
+      the database
+    Default: Inventory-App
+    Type: String
+    AllowedPattern: '[a-zA-Z0-9\-]+'
+    ConstraintDescription: must be a valid security group name.
+  MultiAZ:
+    Description: Multi-AZ master database
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    ConstraintDescription: must be true or false.
+  # for VMs
+  KeyName:
+    Type: String
+    Description: vockey labsuser.pem (same thing)
+    Default: vockey
+  AmazonLinuxAMIID:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+
+Resources:
+# networking
+  ## vpc
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: Capstone VPC
+  IGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Example IGW
+  VPCtoIGWConnection:
+    Type: AWS::EC2::VPCGatewayAttachment
+    DependsOn:
+      - IGW
+      - VPC
+    Properties:
+      InternetGatewayId: !Ref IGW
+      VpcId: !Ref VPC
+  ## public routes
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Public Route Table
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn:
+      - PublicRouteTable
+      - VPCtoIGWConnection
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+      RouteTableId: !Ref PublicRouteTable
+  ## private routes
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Private Route Table 1
+  ## public subnets
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: Public Subnet 1
+  PublicRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn:
+      - PublicRouteTable
+      - PublicSubnet1
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: Public Subnet 2
+  PublicRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn:
+      - PublicRouteTable
+      - PublicSubnet1
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+  ## private subnets
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/23
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: Private Subnet 1
+  PrivateRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn:
+      - PrivateRouteTable
+      - PrivateSubnet1
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/23
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: Private Subnet 2
+  PrivateRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn:
+      - PrivateRouteTable
+      - PrivateSubnet2
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+  ## nat gateway
+  NATGateway:
+    DependsOn: PrivateSubnet1
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      AllocationId: !GetAtt
+        - NATGatewayEIP
+        - AllocationId
+
+
+
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+
+
+  NATGatewayRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: NATGateway
+  ## load balancer
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPC
+    Properties:
+      GroupName: ALBSG
+      GroupDescription: Port 80
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: capstone-lb
+      Subnets:
+      - !Ref PublicSubnet1
+      - !Ref PublicSubnet2
+      Scheme: internet-facing 
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: capstone-lb
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 15
+      HealthyThresholdCount: 5
+      Matcher:
+        HttpCode: '200'
+      Name: TargetGroup
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: '20'
+      Targets:
+      - Id:
+          Ref: AutoScalingGroup
+        Port: 80
+      UnhealthyThresholdCount: 3
+      VpcId:
+        Ref: 'VPC'
+  ## auto scaling group
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: capstone-asg
+      MinSize: "1"
+      MaxSize: "3"
+      DesiredCapacity: "2"
+      HealthCheckGracePeriod: 30
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ExampleLaunchTemplate
+        Version: !GetAtt ExampleLaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+  ## application security group
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPC
+    Properties:
+      GroupName: Inventory-App
+      GroupDescription: Enable access to App
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: Inventory-App
+  ## app role
+  # InstanceProfile:
+  #   Type: AWS::IAM::InstanceProfile
+  #   Properties:
+  #     Path: /
+  #     Roles: [Inventory-App-Role] # jest to juz w awsie
+  #     InstanceProfileName: Inventory-App-Role-Capstone
+  ## launch template
+  ExampleLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: t2.micro
+        KeyName: !Ref KeyName
+        ImageId: !Ref AmazonLinuxAMIID
+        TagSpecifications: 
+          - ResourceType: instance
+            Tags:
+            - Key: Name
+              Value: ExampleAPP
+        # IamInstanceProfile:
+        #   Arn:
+        #     Fn::GetAtt:
+        #     - Inventory-App-Role
+        #     - Arn      
+        SecurityGroupIds:
+            - !Ref AppSecurityGroup
+        UserData:
+          Fn::Base64: !Sub |
+             #!/bin/bash -ex
+             yum -y update
+             amazon-linux-extras install -y lamp-mariadb10.2-php7.2 php7.2
+             yum install -y httpd mariadb-server
+             chkconfig httpd on
+             service httpd start
+             cd /home/ec2-user
+             wget https://aws-tc-largeobjects.s3-us-west-2.amazonaws.com/ILT-TF-200-ACACAD-20-EN/capstone-project/Countrydatadump.sql
+             chown ec2-user:ec2-user Countrydatadump.sql
+             cd /var/www/html
+             wget https://aws-tc-largeobjects.s3-us-west-2.amazonaws.com/ILT-TF-200-ACACAD-20-EN/capstone-project/Example.zip
+             unzip Example.zip -d /var/www/html/
+      LaunchTemplateName: capstone-lt
+# virtual machines
+  ## bastion
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPC
+    Properties:
+      GroupName: Bastion-SG
+      GroupDescription: Enable access to App
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: Bastion-SG
+  BastionInstance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      ImageId: !Ref AmazonLinuxAMIID
+      KeyName: !Ref KeyName
+      InstanceType: t2.micro
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: 'true'
+          SubnetId: !Ref PublicSubnet1
+          GroupSet:
+            - !Ref BastionSecurityGroup
+      SourceDestCheck: 'false'
+      Tags:
+        - Key: Name
+          Value: Bastion
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -ex
+          yum -y update
+# databases
+
+# parameter store
+  DBendpointParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /example/endpoint
+      Type: String
+      Value: TODO #!GetAtt [MasterDB, Endpoint.Address]
+    #DependsOn: MasterDB
+  DBusernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /example/username
+      Type: String
+      Value: !Ref 'DBUser'
+  DBpasswordParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /example/password
+      Type: String
+      Value: !Ref 'DBPassword'
+  DBnameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /example/database
+      Type: String
+      Value: !Ref 'DBName'

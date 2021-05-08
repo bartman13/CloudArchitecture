@@ -1,0 +1,35 @@
+  DBEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: capstone-db-sg
+      GroupDescription: Enable access to MySQL
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+      Tags:
+        - Key: Name
+          Value: Example-DBSG
+  MasterDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: !Ref 'DBName'
+      AllocatedStorage: !Ref 'DBAllocatedStorage'
+      DBInstanceClass: !Ref 'DBInstanceClass'
+      Engine: MySQL
+      MasterUsername: !Ref 'DBUser'
+      MasterUserPassword: !Ref 'DBPassword'
+      MultiAZ: !Ref 'MultiAZ'
+      Tags:
+      - Key: Name
+        Value: Master Database
+      VPCSecurityGroups: [!GetAtt [DBEC2SecurityGroup, GroupId]]
+    DeletionPolicy: Snapshot
+  ReplicaDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      SourceDBInstanceIdentifier: !Ref 'MasterDB'
+      DBInstanceClass: !Ref 'DBInstanceClass'
+      Tags:
+      - Key: Name
+        Value: Read Replica Database
