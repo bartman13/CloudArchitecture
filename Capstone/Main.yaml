@@ -49,13 +49,13 @@ Parameters:
   DBInstanceClass:
     Description: The database instance type
     Type: String
-    Default: db.t2.small
+    Default: db.t3.micro
     AllowedValues: [db.t1.micro, db.m1.small, db.m1.medium, db.m1.large, db.m1.xlarge,
       db.m2.xlarge, db.m2.2xlarge, db.m2.4xlarge, db.m3.medium, db.m3.large, db.m3.xlarge,
       db.m3.2xlarge, db.m4.large, db.m4.xlarge, db.m4.2xlarge, db.m4.4xlarge, db.m4.10xlarge,
       db.r3.large, db.r3.xlarge, db.r3.2xlarge, db.r3.4xlarge, db.r3.8xlarge, db.m2.xlarge,
       db.m2.2xlarge, db.m2.4xlarge, db.cr1.8xlarge, db.t2.micro, db.t2.small, db.t2.medium,
-      db.t2.large]
+      db.t2.large, db.t3.micro]
     ConstraintDescription: must select a valid database instance type.
   EC2SecurityGroup:
     Description: The EC2 security group that contains instances that need access to
@@ -170,14 +170,14 @@ Resources:
       Tags:
         - Key: Name
           Value: Public Subnet 2
-  PublicRouteTableAssociation1:
+  PublicRouteTableAssociation2:
     Type: AWS::EC2::SubnetRouteTableAssociation
     DependsOn:
       - PublicRouteTable
-      - PublicSubnet1
+      - PublicSubnet2
     Properties:
       RouteTableId: !Ref PublicRouteTable
-      SubnetId: !Ref PublicSubnet1
+      SubnetId: !Ref PublicSubnet2
   ## private subnets
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
@@ -200,7 +200,6 @@ Resources:
     Properties:
       RouteTableId: !Ref PrivateRouteTable
       SubnetId: !Ref PrivateSubnet1
-
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
     DependsOn: VPC
@@ -231,16 +230,10 @@ Resources:
       AllocationId: !GetAtt
         - NATGatewayEIP
         - AllocationId
-
-
-
   NATGatewayEIP:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
-
-
-
   NATGatewayRoute:
     Type: AWS::EC2::Route
     Properties:
@@ -304,10 +297,6 @@ Resources:
       TargetGroupAttributes:
       - Key: deregistration_delay.timeout_seconds
         Value: '20'
-      Targets:
-      - Id:
-          Ref: AutoScalingGroup
-        Port: 80
       UnhealthyThresholdCount: 3
       VpcId:
         Ref: 'VPC'
@@ -316,6 +305,7 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       AutoScalingGroupName: capstone-asg
+      TargetGroupARNs: [!Ref TargetGroup]
       MinSize: "1"
       MaxSize: "3"
       DesiredCapacity: "2"
@@ -347,12 +337,34 @@ Resources:
         - Key: Name
           Value: Inventory-App
   ## app role
-  # InstanceProfile:
-  #   Type: AWS::IAM::InstanceProfile
-  #   Properties:
-  #     Path: /
-  #     Roles: [Inventory-App-Role] # jest to juz w awsie
-  #     InstanceProfileName: Inventory-App-Role-Capstone
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref AppRole]
+      InstanceProfileName: Inventory-App-Role
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: Inventory-App-Role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: ssm:*
+                Resource: '*'
   ## launch template
   ExampleLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
@@ -366,11 +378,11 @@ Resources:
             Tags:
             - Key: Name
               Value: ExampleAPP
-        # IamInstanceProfile:
-        #   Arn:
-        #     Fn::GetAtt:
-        #     - Inventory-App-Role
-        #     - Arn      
+        IamInstanceProfile:
+          Arn:
+            Fn::GetAtt:
+            - InstanceProfile
+            - Arn      
         SecurityGroupIds:
             - !Ref AppSecurityGroup
         UserData:
@@ -410,7 +422,7 @@ Resources:
     Properties:
       ImageId: !Ref AmazonLinuxAMIID
       KeyName: !Ref KeyName
-      InstanceType: t2.micro
+      InstanceType: t2.nano
       NetworkInterfaces:
         - DeviceIndex: '0'
           AssociatePublicIpAddress: 'true'
@@ -427,14 +439,66 @@ Resources:
           yum -y update
 # databases
 
+  DBEC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: capstone-db-sg
+      GroupDescription: Enable access to MySQL
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+      Tags:
+        - Key: Name
+          Value: Example-DBSG
+
+  myDBSubnetGroup:
+    Type: "AWS::RDS::DBSubnetGroup"
+    Properties:
+      DBSubnetGroupDescription: "description"
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+  MasterDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: !Ref 'DBName'
+      AllocatedStorage: !Ref 'DBAllocatedStorage'
+      DBInstanceClass: !Ref 'DBInstanceClass'
+      Engine: MySQL
+      MasterUsername: !Ref 'DBUser'
+      MasterUserPassword: !Ref 'DBPassword'
+      MultiAZ: !Ref 'MultiAZ'
+      Tags:
+      - Key: Name
+        Value: Master Database
+      VPCSecurityGroups: [!GetAtt [DBEC2SecurityGroup, GroupId]]
+      DBSubnetGroupName:
+        Ref: myDBSubnetGroup
+    DeletionPolicy: Snapshot
+  ReplicaDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      VPCSecurityGroups: [!GetAtt [DBEC2SecurityGroup, GroupId]]
+      SourceDBInstanceIdentifier: !Ref 'MasterDB'
+      DBInstanceClass: !Ref 'DBInstanceClass'
+      Tags:
+      - Key: Name
+        Value: Read Replica Database
 # parameter store
   DBendpointParameter:
     Type: AWS::SSM::Parameter
     Properties:
       Name: /example/endpoint
       Type: String
-      Value: TODO #!GetAtt [MasterDB, Endpoint.Address]
-    #DependsOn: MasterDB
+      Value: !GetAtt [MasterDB, Endpoint.Address]
+    DependsOn: MasterDB
   DBusernameParameter:
     Type: AWS::SSM::Parameter
     Properties:
