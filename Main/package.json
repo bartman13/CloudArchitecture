@@ -1,0 +1,29 @@
+{
+  "name": "mars-images-transformation",
+  "version": "1.0.0",
+  "description": "This is Lambda that gets images from Mars using NASA API, transforms them and stores in S3",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bartman13/CloudArchitecture.git"
+  },
+  "keywords": [
+    "s3",
+    "lambda",
+    "api",
+    "image"
+  ],
+  "author": "",
+  "license": "GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/bartman13/CloudArchitecture/issues"
+  },
+  "homepage": "https://github.com/bartman13/CloudArchitecture#readme",
+  "dependencies": {
+    "follow-redirects": "^1.14.1"
+  }
+}
