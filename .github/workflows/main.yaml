@@ -1,0 +1,19 @@
+name: Main project pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: main/lambda
+    steps:
+      - uses: actions/checkout@v2
+      - run: |
+              npm ci
+              npm run lint
