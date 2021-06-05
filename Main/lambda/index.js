@@ -63,7 +63,9 @@ function receivedMessage(event) {
   var message = event.message;  console.log("Received message for user %d and page %d at %d with message:", senderID, recipientID, timeOfMessage);
   console.log(JSON.stringify(message));  var messageId = message.mid;  var messageText = message.text;
 // Write in S3 Photos
-  getImages("2015-6-3", extractImageUrls, "negate")
+  //getImages("2015-6-3", extractImageUrls, "negate")
+  processString(messageText)
+
 //
   var messageAttachments = message.attachments;  if (messageText) {    // If we receive a text message, check to see if it matches a keyword
     // and send back the example. Otherwise, just echo the text we received.
@@ -130,7 +132,7 @@ const getImages = function(day, callback, filterName) {
     httpsFR.get(requestUrl, (res) => {
       let body = '';
       res.on('data', chunk => body += chunk);
-      res.on('end', () => callback(null, JSON.parse(body), filterName, filterArgs));
+      res.on('end', () => callback(null, JSON.parse(body), day, filterName, filterArgs));
     }).on('error', (e) => {
         callback(Error(e))
     })
@@ -141,13 +143,13 @@ const getNasaApiKey = function() {
     return "DEMO_KEY"
 }
 
-const extractImageUrls = function(_, body, filterName, filterArgs) {
+const extractImageUrls = function(_, body, day, filterName, filterArgs) {
     let urls = []
     body.photos.forEach(function(photo) {
         urls.push(photo.img_src.replace("http", "https"))
     })
     console.log(urls)
-    downloadAndFilterImages(urls, filterName, filterArgs)
+    downloadAndFilterImages(urls, day, filterName, filterArgs)
 }
 
 const putObjectToS3 = async function(bucket, key, data) {
@@ -198,21 +200,30 @@ const putObjectToS3 = async function(bucket, key, data) {
 
 // }
 
-const downloadAndFilterImages = function(urls, filterName, filterArgs) {
+const downloadAndFilterImages = function(urls, day, filterName, filterArgs) {
     const filterArgsObj = Object.fromEntries(filterArgs);
+    let imageNumber = 0
     urls.forEach(function(url) {
         const dest = url.split("/").pop()
         console.log(url)
-
         httpsFR.get(url, (res) => {
+          if(filterName) {
+            res.pipe(executeFunctionByName(filterName, sharp(), filterArgsObj))
+          }
           const data = [];
           res.on('data', (chunk) => {
             data.push(chunk);
           }).on('end', () => {
             let buffer = Buffer.concat(data);
             // Do something with the buffer
-            let r = Math.random().toString(36).substring(7);
-            putObjectToS3('cloud-project-mars-photos','file' + filterName + r + '.jpg', buffer)
+            //let r = Math.random().toString(36).substring(7);
+            let filterArgsString = JSON.stringify(filterArgsObj).replace(/{/g,"").replace(/}/g,"").replace(/"/g, "").replace(/:/g,"").replace(/,/g,"-")
+            if(filterName) {
+              putObjectToS3('cloud-project-mars-photos',day + filterName + filterArgsString + (++imageNumber) + '.jpg', buffer)
+            }
+            else {
+              putObjectToS3('cloud-project-mars-photos',day + (++imageNumber) + '.jpg', buffer)
+            }
           });
         }).on('error', (err) => {
           console.log('download error:', err);
@@ -235,17 +246,36 @@ function executeFunctionByName(functionName, context ) {
     return context[func].apply(context, args);
 }
 
+function processString(str) {
+  let res = str.split(",");
+  res.forEach((_, i) => res[i] = res[i].trim())
+  const dateRegex = new RegExp(/^\d{4}-\d{1,2}-\d{1,2}$/);
+  if (!dateRegex.test(res[0])) {
+      return "invalid date"
+  }
+  if(res.length == 1) {
+      getImages(res[0], extractImageUrls)
+      return
+  }
+  const availableFilters = ["rotate", "flip", "flop", "affine", "sharpen", "median", "blur", "flatten", "gamma", "negate", "normalise", "normalize", "clahe", "convolve", "threshold", "boolean", "linear", "recomb", "modulate"]
+  if(!availableFilters.includes(res[1])) {
+      return "invalid filter"
+  }
+  if(res.length == 2) {
+      getImages(res[0], extractImageUrls, res[1])
+      return
+  }
+  let args = res.slice(2)
+  let argsPrepared = []
+  args.forEach(arg => argsPrepared.push(arg.split(":")))
+  argsPrepared.forEach(([f, v], i) => argsPrepared[i] = [f, parseFloat(v)])
+  getImages(res[0], extractImageUrls, res[1], ...argsPrepared)
+}
+
 //getImages("2015-6-3", extractImageUrls, "negate")
 //getImages("2015-6-3", extractImageUrls, "modulate", ["brightness", 0.5], ["saturation", 0.5], ["hue", 90])
 
- function stream2buffer( stream ) {
-
-        return new Promise( (resolve, reject) => {
-            let _buf = []
-
-            stream.on( 'data', chunk => _buf.push(chunk) )
-            stream.on( 'end', () => resolve(Buffer.concat(_buf)) )
-            stream.on( 'error', err => reject( err ))
-
-        })
- }
+// let example1 = "2015-6-3"
+// let example2 = "2015-6-3, negate"
+// let example3 = "2015-6-3, modulate, brightness: 0.5, saturation: 0.5, hue: 90"
+// processString(example3)
